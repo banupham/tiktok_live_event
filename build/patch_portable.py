@@ -1,6 +1,7 @@
 from pathlib import Path
 import sys
 
+# Temporary helper used only while GitHub Actions produces the portable archives.
 bundle = Path(sys.argv[1])
 path = bundle / "app" / "src" / "collector" / "direct_webcast_process.mjs"
 text = path.read_text(encoding="utf-8")
