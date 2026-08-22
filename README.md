@@ -11,6 +11,14 @@ Repo phân phối **Direct Webcast mode** đã đóng gói. Không cần `npm in
 
 Có thể thêm API port ở tham số thứ hai, ví dụ `run.bat ten_tiktok 8788` hoặc `./run.sh ten_tiktok 8788`.
 
+## Truy cập từ LAN
+
+Các bản portable mặc định bind API vào `0.0.0.0:8787`, vì vậy máy/điện thoại khác cùng mạng LAN có thể truy cập bằng IP LAN của máy chạy middleware, ví dụ `http://192.168.1.10:8787/api/health` hoặc SSE `http://192.168.1.10:8787/api/events`.
+
+Muốn giới hạn chỉ trên máy local, đặt `API_HOST=127.0.0.1` trước khi chạy.
+
+**Windows:** gói có thêm `allow-lan.bat`. Nếu Windows Firewall chặn kết nối, chạy `allow-lan.bat` (hoặc `allow-lan.bat 8788` nếu dùng port khác). Script chỉ mở TCP port tương ứng trên profile **Private network** và sẽ tự yêu cầu quyền Administrator.
+
 ## Event avatar
 
 Direct collector lấy `avatar_thumb` của user và tải file ảnh vào **thư mục tạm của tiến trình**. Avatar được cache theo TikTok `userId` (fallback `uniqueId`) nên COMMENT/JOIN/LIKE/FOLLOW/SHARE/GIFT của cùng user **không tải và không phát avatar lặp lại**.
