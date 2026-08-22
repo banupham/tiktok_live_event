@@ -1,4 +1,4 @@
-name: Build avatar Termux portable and publish
+name: Build LAN Termux portable and publish
 
 on:
   pull_request:
@@ -14,7 +14,7 @@ permissions:
 env:
   SOURCE_REPO: banupham/tiktok_live_cmd_active_viewers_v9
   SOURCE_REF: simplify-windows-linux-termux
-  DESKTOP_RUN_ID: '32567498777'
+  DESKTOP_RUN_ID: '32568103326'
   PYDANTIC_CORE_VERSION: '2.46.4'
 
 jobs:
@@ -115,7 +115,8 @@ jobs:
           USERNAME=$1
           if [ "${2:-}" != "" ]; then export API_PORT=$2; fi
           : "${API_PORT:=8787}"
-          export API_PORT COLLECTOR_MODE=direct PYTHON_BIN=python
+          : "${API_HOST:=0.0.0.0}"
+          export API_HOST API_PORT COLLECTOR_MODE=direct PYTHON_BIN=python
           export PYTHONPATH="$ROOT/vendor${PYTHONPATH:+:$PYTHONPATH}"
           export PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
           exec node "$ROOT/app/a.mjs" "$USERNAME"
@@ -126,7 +127,8 @@ jobs:
           TERMUX ARM64 - KHONG CAN npm install / pip install
           ==================================================
           Co event avatar: avatar_thumb duoc tai mot lan/user vao thu muc temp cua collector.
-          Event avatar gom avatarUrl + avatarPath; cung avatar khong lap theo comment/join/like/gift.
+          API mac dinh bind 0.0.0.0:8787 de thiet bi khac trong LAN truy cap.
+          Muon chi local: API_HOST=127.0.0.1 ./run.sh ten_tiktok
           Thu vien Python da vendor san, gom pydantic-core native Android ARM64.
           Yeu cau nen: Termux co san node va python (Python $TERMUX_PYVER target).
           Chay: ./run.sh ten_tiktok [api_port]
@@ -184,6 +186,14 @@ jobs:
 
           Có thể thêm API port ở tham số thứ hai, ví dụ `run.bat ten_tiktok 8788` hoặc `./run.sh ten_tiktok 8788`.
 
+          ## Truy cập từ LAN
+
+          Các bản portable mặc định bind API vào `0.0.0.0:8787`, vì vậy máy/điện thoại khác cùng mạng LAN có thể truy cập bằng IP LAN của máy chạy middleware, ví dụ `http://192.168.1.10:8787/api/health` hoặc SSE `http://192.168.1.10:8787/api/events`.
+
+          Muốn giới hạn chỉ trên máy local, đặt `API_HOST=127.0.0.1` trước khi chạy.
+
+          **Windows:** gói có thêm `allow-lan.bat`. Nếu Windows Firewall chặn kết nối, chạy `allow-lan.bat` (hoặc `allow-lan.bat 8788` nếu dùng port khác). Script chỉ mở TCP port tương ứng trên profile **Private network** và sẽ tự yêu cầu quyền Administrator.
+
           ## Event avatar
 
           Direct collector lấy `avatar_thumb` của user và tải file ảnh vào **thư mục tạm của tiến trình**. Avatar được cache theo TikTok `userId` (fallback `uniqueId`) nên COMMENT/JOIN/LIKE/FOLLOW/SHARE/GIFT của cùng user **không tải và không phát avatar lặp lại**.
@@ -201,5 +211,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add README.md SHA256SUMS.txt releases/
-          git commit -m "Update portable packages with avatar event"
+          git commit -m "Update portable packages with LAN access"
           git push origin main
