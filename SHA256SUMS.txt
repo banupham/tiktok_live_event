@@ -1,4 +1,4 @@
-32545821439470129a4a838d290cee504c603138c0e2cd569babe7671487e744  releases/tiktok-live-event-linux-arm64.tar.gz
-3d7f75601e4cce7e1edd0e8cc04308a110763f904d681dbcb227029086063c04  releases/tiktok-live-event-linux-x64.tar.gz
-2cad148402f6b3cfbef10156f06c5c34d54ab3de214f98cda76f1ddfce2cd436  releases/tiktok-live-event-termux-arm64.tar.gz
-98debd4ef8a8a6b91b93d3604154f2bca1b6f90d255aca569a7234b1c2e0ecd7  releases/tiktok-live-event-windows-x64.zip
+5549b9671e0589248b985319efaec05e178b3ed8625c380ce74393fea95bcb12  releases/tiktok-live-event-linux-arm64.tar.gz
+388af6c2add98c29587bceeea76c1568c82c7599432b81d27837dc4edc309278  releases/tiktok-live-event-linux-x64.tar.gz
+8b2c2c55fb447a4f4a7db4ceee97b4cbe3155144663c844a0a7131038238fef9  releases/tiktok-live-event-termux-arm64.tar.gz
+43f1d1dc752a52e683361404efe3c9e4fb292e8327c096f61c5b2a52f4d953d9  releases/tiktok-live-event-windows-x64.zip
