@@ -87,52 +87,51 @@ Hiện tại có 4 cách chính để lấy event:
 
 | Cách | Realtime | Kiểu hoạt động | Phù hợp |
 |---|---|---|---|
-| SSE `/api/events` | Có | Client giữ kết nối và middleware đẩy event xuống | Web, Node.js, app/game hỗ trợ SSE |
+| SSE `/api/events` | Có | Client giữ kết nối và middleware đẩy event xuống | Web, Node.js, app/game hỗ trợ HTTP stream |
 | Webhook | Có | Middleware chủ động HTTP POST event sang server khác | Game server, backend, service khác |
 | Polling `/api/recent` | Gần realtime | Client gọi API định kỳ | App đơn giản, thiết bị không hỗ trợ SSE |
 | JSONL | Gần realtime | Đọc file log event trên máy chạy middleware | Log, debug, replay, xử lý cùng máy |
 
 Hiện tại middleware **chưa mở WebSocket server**.
 
+Trong toàn bộ ví dụ bên dưới, giả sử máy chạy TikTok middleware có địa chỉ:
+
+```text
+192.168.1.10:8787
+```
+
+Nếu client chạy cùng máy, có thể thay bằng:
+
+```text
+127.0.0.1:8787
+```
+
 ---
 
-## 1. SSE realtime — `/api/events`
+# 1. SSE realtime — `/api/events`
 
-Đây là cách đơn giản nhất để một client giữ kết nối và nhận event ngay khi TikTok LIVE phát sinh sự kiện.
+SSE là cách đơn giản nhất để client giữ một kết nối HTTP mở và nhận event ngay khi TikTok LIVE phát sinh sự kiện.
 
 Endpoint:
 
 ```text
 GET /api/events
+Content-Type: text/event-stream
 ```
 
-Ví dụ cùng máy:
-
-```text
-http://127.0.0.1:8787/api/events
-```
-
-Ví dụ từ máy khác trong LAN:
+URL LAN:
 
 ```text
 http://192.168.1.10:8787/api/events
 ```
 
-### Test bằng curl
-
-```bash
-curl -N http://192.168.1.10:8787/api/events
-```
-
-Khi mới kết nối sẽ nhận event `connected`.
-
-Sau đó mỗi TikTok event được gửi theo SSE với tên:
+Middleware phát TikTok event với tên SSE:
 
 ```text
 event: tiktok-event
 ```
 
-Ví dụ:
+Ví dụ dữ liệu nhận được:
 
 ```text
 id: 1234567890
@@ -142,85 +141,101 @@ data: {"schemaVersion":1,"eventId":"1234567890","eventType":"comment",...}
 
 Middleware cũng gửi ping định kỳ để giữ kết nối sống.
 
-### JavaScript / Browser
+## SSE — test nhanh bằng curl
 
-```js
+```bash
+curl -N http://192.168.1.10:8787/api/events
+```
+
+`-N` giúp curl không buffer output, event sẽ hiện ngay khi nhận được.
+
+## SSE — JavaScript trên Browser
+
+```html
+<script>
 const source = new EventSource(
   "http://192.168.1.10:8787/api/events"
 );
 
 source.addEventListener("connected", (event) => {
-  console.log("Đã kết nối middleware", event.data);
+  console.log("Đã kết nối middleware:", event.data);
 });
 
-source.addEventListener("tiktok-event", (event) => {
-  const data = JSON.parse(event.data);
+source.addEventListener("tiktok-event", (message) => {
+  const event = JSON.parse(message.data);
 
-  console.log("EVENT:", data.eventType, data);
+  console.log("EVENT:", event.eventType, event);
 
-  switch (data.eventType) {
+  switch (event.eventType) {
     case "comment":
       console.log(
         "COMMENT:",
-        data.user.displayName,
-        data.payload.text
+        event.user.displayName,
+        event.payload.text
       );
       break;
 
     case "gift":
       console.log(
         "GIFT:",
-        data.user.displayName,
-        data.payload.giftName,
-        data.payload.count
+        event.user.displayName,
+        event.payload.giftName,
+        event.payload.count
       );
       break;
 
     case "like":
       console.log(
         "LIKE:",
-        data.user.displayName,
-        data.payload.count
+        event.user.displayName,
+        event.payload.count
       );
       break;
 
     case "join":
-      console.log("JOIN:", data.user.displayName);
+      console.log("JOIN:", event.user.displayName);
       break;
 
     case "follow":
-      console.log("FOLLOW:", data.user.displayName);
+      console.log("FOLLOW:", event.user.displayName);
       break;
 
     case "share":
-      console.log("SHARE:", data.user.displayName);
+      console.log("SHARE:", event.user.displayName);
       break;
 
     case "avatar":
       console.log(
         "AVATAR:",
-        data.user.uniqueId,
-        data.payload.avatarPath
+        event.user.uniqueId,
+        event.payload.avatarPath
       );
       break;
   }
 });
 
 source.onerror = (error) => {
-  console.error("SSE lỗi/mất kết nối", error);
+  console.error("SSE lỗi/mất kết nối:", error);
 };
+</script>
 ```
 
-`EventSource` của trình duyệt sẽ tự thử reconnect khi kết nối bị mất.
+`EventSource` của trình duyệt sẽ tự thử reconnect nếu kết nối bị mất.
 
-### Node.js không dùng thư viện SSE
+## SSE — Node.js 18+ không cần package ngoài
 
-Node có thể đọc stream HTTP trực tiếp:
+Tạo file `sse-client.mjs`:
 
 ```js
-const response = await fetch(
-  "http://192.168.1.10:8787/api/events"
-);
+const url = "http://192.168.1.10:8787/api/events";
+
+console.log("Connecting:", url);
+
+const response = await fetch(url);
+
+if (!response.ok || !response.body) {
+  throw new Error(`SSE HTTP ${response.status}`);
+}
 
 const reader = response.body.getReader();
 const decoder = new TextDecoder();
@@ -231,30 +246,87 @@ while (true) {
   if (done) break;
 
   buffer += decoder.decode(value, { stream: true });
+  buffer = buffer.replace(/\r\n/g, "\n");
 
   const blocks = buffer.split("\n\n");
   buffer = blocks.pop() || "";
 
   for (const block of blocks) {
-    const eventLine = block
-      .split("\n")
-      .find(line => line.startsWith("event:"));
+    if (!block || block.startsWith(":")) continue;
 
-    const dataLine = block
-      .split("\n")
-      .find(line => line.startsWith("data:"));
+    const lines = block.split("\n");
+    const eventName = lines
+      .find(line => line.startsWith("event:"))
+      ?.slice(6)
+      .trim();
 
-    if (eventLine?.includes("tiktok-event") && dataLine) {
-      const event = JSON.parse(dataLine.slice(5).trim());
-      console.log(event.eventType, event);
-    }
+    const dataText = lines
+      .filter(line => line.startsWith("data:"))
+      .map(line => line.slice(5).trimStart())
+      .join("\n");
+
+    if (eventName !== "tiktok-event" || !dataText) continue;
+
+    const event = JSON.parse(dataText);
+    console.log(event.eventType, event);
   }
 }
 ```
 
+Chạy:
+
+```bash
+node sse-client.mjs
+```
+
+## SSE — Python chỉ dùng thư viện chuẩn
+
+Tạo file `sse_client.py`:
+
+```python
+import json
+import urllib.request
+
+url = "http://192.168.1.10:8787/api/events"
+request = urllib.request.Request(
+    url,
+    headers={"Accept": "text/event-stream"},
+)
+
+with urllib.request.urlopen(request, timeout=None) as response:
+    event_name = None
+    data_lines = []
+
+    for raw_line in response:
+        line = raw_line.decode("utf-8").rstrip("\r\n")
+
+        if line == "":
+            if event_name == "tiktok-event" and data_lines:
+                event = json.loads("\n".join(data_lines))
+                print(event["eventType"], event)
+
+            event_name = None
+            data_lines = []
+            continue
+
+        if line.startswith(":"):
+            continue
+
+        if line.startswith("event:"):
+            event_name = line[6:].strip()
+        elif line.startswith("data:"):
+            data_lines.append(line[5:].lstrip())
+```
+
+Chạy:
+
+```bash
+python sse_client.py
+```
+
 ---
 
-## 2. Webhook — middleware chủ động POST event
+# 2. Webhook — middleware chủ động POST event
 
 Webhook phù hợp khi game/backend của bạn đã có HTTP server riêng.
 
@@ -268,15 +340,9 @@ Middleware
 Game server / Backend
 ```
 
-Mỗi event được middleware gửi bằng:
+Mỗi event được middleware gửi bằng HTTP `POST` với body JSON.
 
-```text
-POST application/json
-```
-
-### Linux / Termux
-
-Đặt biến `WEBHOOK_URLS` trước khi chạy:
+## Cấu hình Webhook trên Linux / Termux
 
 ```bash
 WEBHOOK_URLS=http://192.168.1.20:9000/tiktok-event \
@@ -290,19 +356,22 @@ WEBHOOK_URLS=http://192.168.1.20:9000/tiktok-event,http://192.168.1.30:8080/even
 ./run.sh ten_tiktok
 ```
 
-### Windows CMD
+## Cấu hình Webhook trên Windows CMD
 
 ```bat
 set WEBHOOK_URLS=http://192.168.1.20:9000/tiktok-event
 run.bat ten_tiktok
 ```
 
-### Ví dụ server Node.js nhận Webhook
+## Webhook receiver — Node.js không cần package ngoài
 
-Không cần package ngoài:
+Tạo file `webhook-server.mjs` trên máy sẽ nhận event:
 
 ```js
 import http from "node:http";
+
+const host = "0.0.0.0";
+const port = 9000;
 
 const server = http.createServer((req, res) => {
   if (req.method !== "POST" || req.url !== "/tiktok-event") {
@@ -313,6 +382,8 @@ const server = http.createServer((req, res) => {
 
   let body = "";
 
+  req.setEncoding("utf8");
+
   req.on("data", chunk => {
     body += chunk;
   });
@@ -321,28 +392,96 @@ const server = http.createServer((req, res) => {
     try {
       const event = JSON.parse(body);
 
-      console.log("TikTok event:", event.eventType);
-      console.log(event);
+      console.log("EVENT:", event.eventType, event);
+
+      if (event.eventType === "comment") {
+        console.log(
+          `${event.user.displayName}: ${event.payload.text}`
+        );
+      }
 
       res.statusCode = 200;
-      res.end("OK");
-    } catch {
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ ok: true }));
+    } catch (error) {
+      console.error(error);
       res.statusCode = 400;
       res.end("Invalid JSON");
     }
   });
 });
 
-server.listen(9000, "0.0.0.0", () => {
-  console.log("Listening on port 9000");
+server.listen(port, host, () => {
+  console.log(`Webhook listening on http://${host}:${port}/tiktok-event`);
 });
+```
+
+Chạy:
+
+```bash
+node webhook-server.mjs
+```
+
+Sau đó cấu hình máy chạy middleware gửi tới IP của máy này, ví dụ:
+
+```text
+http://192.168.1.20:9000/tiktok-event
+```
+
+## Webhook receiver — Python chỉ dùng thư viện chuẩn
+
+Tạo file `webhook_server.py`:
+
+```python
+import json
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+HOST = "0.0.0.0"
+PORT = 9000
+
+
+class Handler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        if self.path != "/tiktok-event":
+            self.send_response(404)
+            self.end_headers()
+            return
+
+        length = int(self.headers.get("Content-Length", "0"))
+        body = self.rfile.read(length)
+
+        try:
+            event = json.loads(body.decode("utf-8"))
+            print("EVENT:", event.get("eventType"), event)
+
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"ok":true}')
+        except Exception as exc:
+            print("Invalid event:", exc)
+            self.send_response(400)
+            self.end_headers()
+
+
+server = ThreadingHTTPServer((HOST, PORT), Handler)
+print(f"Webhook listening on {HOST}:{PORT}/tiktok-event")
+server.serve_forever()
+```
+
+Chạy:
+
+```bash
+python webhook_server.py
 ```
 
 Middleware coi HTTP `2xx` là gửi thành công. Nếu endpoint lỗi hoặc timeout, middleware có cơ chế thử gửi lại theo cấu hình retry.
 
+> Vì Webhook có thể retry khi gửi thất bại, phía receiver nên dùng `eventId` để chống xử lý trùng.
+
 ---
 
-## 3. Polling HTTP — `/api/recent`
+# 3. Polling HTTP — `/api/recent`
 
 Nếu client không giữ được SSE và cũng không mở được webhook server, có thể gọi API định kỳ.
 
@@ -352,7 +491,7 @@ Endpoint:
 GET /api/recent?limit=50
 ```
 
-Ví dụ:
+Ví dụ test bằng curl:
 
 ```bash
 curl "http://192.168.1.10:8787/api/recent?limit=50"
@@ -363,7 +502,7 @@ Response:
 ```json
 {
   "ok": true,
-  "count": 2,
+  "count": 1,
   "events": [
     {
       "schemaVersion": 1,
@@ -386,37 +525,123 @@ Response:
 
 `limit` tối đa hiện tại là `500`.
 
-### JavaScript polling mỗi 1 giây
+`/api/recent` trả lại các event gần nhất đang nằm trong bộ nhớ, không chỉ event mới kể từ lần gọi trước. Vì vậy client **phải tự chống trùng bằng `eventId`**.
+
+## Polling — JavaScript / Node.js 18+
+
+Tạo file `polling-client.mjs`:
 
 ```js
+const url = "http://192.168.1.10:8787/api/recent?limit=100";
 const processed = new Set();
+const order = [];
+const MAX_IDS = 5000;
 
-setInterval(async () => {
-  const response = await fetch(
-    "http://192.168.1.10:8787/api/recent?limit=100"
-  );
+function remember(eventId) {
+  if (processed.has(eventId)) return false;
 
-  const result = await response.json();
+  processed.add(eventId);
+  order.push(eventId);
 
-  for (const event of result.events) {
-    if (processed.has(event.eventId)) continue;
-
-    processed.add(event.eventId);
-
-    console.log("NEW EVENT:", event.eventType, event);
+  while (order.length > MAX_IDS) {
+    const oldId = order.shift();
+    processed.delete(oldId);
   }
-}, 1000);
+
+  return true;
+}
+
+async function poll() {
+  try {
+    const response = await fetch(url);
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    const result = await response.json();
+
+    // recent thường có thể chứa cả event đã thấy trước đó
+    for (const event of result.events) {
+      if (!remember(event.eventId)) continue;
+
+      console.log("NEW EVENT:", event.eventType, event);
+    }
+  } catch (error) {
+    console.error("Polling error:", error.message);
+  }
+}
+
+await poll();
+setInterval(poll, 1000);
 ```
 
-### Quan trọng khi polling
+Chạy:
 
-`/api/recent` trả lại **event gần nhất đã nằm trong bộ nhớ**, không chỉ event mới kể từ lần gọi trước.
+```bash
+node polling-client.mjs
+```
 
-Vì vậy client nên lưu `eventId` đã xử lý để tránh chạy một event nhiều lần.
+## Polling — Python chỉ dùng thư viện chuẩn
+
+Tạo file `polling_client.py`:
+
+```python
+import json
+import time
+import urllib.request
+from collections import deque
+
+URL = "http://192.168.1.10:8787/api/recent?limit=100"
+MAX_IDS = 5000
+
+processed = set()
+order = deque()
+
+
+def remember(event_id):
+    if event_id in processed:
+        return False
+
+    processed.add(event_id)
+    order.append(event_id)
+
+    while len(order) > MAX_IDS:
+        old_id = order.popleft()
+        processed.discard(old_id)
+
+    return True
+
+
+while True:
+    try:
+        with urllib.request.urlopen(URL, timeout=5) as response:
+            result = json.load(response)
+
+        for event in result.get("events", []):
+            event_id = event.get("eventId")
+            if not event_id or not remember(event_id):
+                continue
+
+            print("NEW EVENT:", event.get("eventType"), event)
+
+    except Exception as exc:
+        print("Polling error:", exc)
+
+    time.sleep(1)
+```
+
+Chạy:
+
+```bash
+python polling_client.py
+```
+
+Khoảng polling `500 ms`–`1000 ms` thường dễ dùng cho game/app thông thường. Poll quá nhanh sẽ tạo nhiều request không cần thiết.
 
 ---
 
-## 4. Đọc file JSONL
+# 4. Đọc file JSONL
 
 Middleware có thể ghi event xuống file JSONL để log/debug/replay.
 
@@ -428,15 +653,160 @@ Mỗi dòng là một JSON event độc lập:
 {"eventId":"...","eventType":"gift",...}
 ```
 
-Có thể theo dõi realtime trên Linux/Termux bằng:
+Tùy layout của bản portable, file nằm trong thư mục `data` của app/middleware, thường là:
 
-```bash
-tail -f data/events.jsonl
+```text
+data/events.jsonl
 ```
 
-Tùy layout của bản portable, file nằm trong thư mục `data` của app/middleware.
-
 Cách này phù hợp nhất khi chương trình đọc event chạy trên **cùng máy** với middleware.
+
+## JSONL — theo dõi nhanh bằng shell
+
+Linux / Termux:
+
+```bash
+tail -F data/events.jsonl
+```
+
+Nếu muốn parse từng dòng bằng `jq`:
+
+```bash
+tail -F data/events.jsonl | jq -c .
+```
+
+## JSONL — Node.js đọc các dòng mới được append
+
+Tạo file `jsonl-client.mjs` trong thư mục app:
+
+```js
+import fs from "node:fs";
+
+const file = "data/events.jsonl";
+let position = 0;
+let remainder = "";
+let reading = false;
+
+if (fs.existsSync(file)) {
+  position = fs.statSync(file).size;
+}
+
+async function readNewData() {
+  if (reading) return;
+  reading = true;
+
+  try {
+    if (!fs.existsSync(file)) return;
+
+    const stat = fs.statSync(file);
+
+    // File bị truncate / tạo lại
+    if (stat.size < position) {
+      position = 0;
+      remainder = "";
+    }
+
+    if (stat.size === position) return;
+
+    const length = stat.size - position;
+    const buffer = Buffer.alloc(length);
+    const fd = fs.openSync(file, "r");
+
+    try {
+      fs.readSync(fd, buffer, 0, length, position);
+    } finally {
+      fs.closeSync(fd);
+    }
+
+    position = stat.size;
+    remainder += buffer.toString("utf8");
+
+    const lines = remainder.split(/\r?\n/);
+    remainder = lines.pop() || "";
+
+    for (const line of lines) {
+      if (!line.trim()) continue;
+
+      try {
+        const event = JSON.parse(line);
+        console.log("EVENT:", event.eventType, event);
+      } catch (error) {
+        console.error("JSONL parse error:", error.message);
+      }
+    }
+  } finally {
+    reading = false;
+  }
+}
+
+console.log("Watching:", file);
+setInterval(readNewData, 250);
+```
+
+Chạy:
+
+```bash
+node jsonl-client.mjs
+```
+
+Đoạn mẫu trên bắt đầu từ cuối file hiện tại, tức là chỉ xử lý các dòng được append sau khi client chạy.
+
+## JSONL — Python follow file
+
+Tạo file `jsonl_client.py`:
+
+```python
+import json
+import os
+import time
+
+FILE = "data/events.jsonl"
+
+while not os.path.exists(FILE):
+    print("Waiting for", FILE)
+    time.sleep(1)
+
+with open(FILE, "r", encoding="utf-8") as f:
+    # Chỉ nhận event mới từ thời điểm client bắt đầu
+    f.seek(0, os.SEEK_END)
+
+    while True:
+        line = f.readline()
+
+        if not line:
+            time.sleep(0.2)
+            continue
+
+        try:
+            event = json.loads(line)
+            print("EVENT:", event.get("eventType"), event)
+        except json.JSONDecodeError as exc:
+            print("JSONL parse error:", exc)
+```
+
+Chạy:
+
+```bash
+python jsonl_client.py
+```
+
+---
+
+# So sánh nhanh các kiểu kết nối
+
+| Phương thức | Độ trễ | Client cần mở port? | Middleware cần biết địa chỉ client? | Dùng qua LAN | Ghi chú |
+|---|---:|---:|---:|---:|---|
+| SSE | Thấp | Không | Không | Có | Client kết nối tới middleware và giữ stream |
+| Webhook | Thấp | Có | Có | Có | Middleware POST tới server của client |
+| Polling | Phụ thuộc chu kỳ poll | Không | Không | Có | Dễ triển khai nhưng tạo request định kỳ |
+| JSONL | Thấp/gần realtime | Không | Không | Không trực tiếp | Tốt nhất khi cùng máy |
+
+### Nên chọn cách nào?
+
+- **Web/app/game client cần nhận liên tục:** SSE.
+- **Game server/backend đã có HTTP server:** Webhook.
+- **Thiết bị chỉ gọi HTTP request thông thường:** Polling `/api/recent`.
+- **Tool xử lý/log chạy cùng máy:** JSONL.
 
 ---
 
@@ -515,7 +885,7 @@ Các field quan trọng cho app/game:
 }
 ```
 
-Dùng:
+Ví dụ xử lý:
 
 ```js
 if (event.eventType === "comment") {
@@ -597,8 +967,6 @@ if (event.eventType === "comment") {
 ---
 
 ## GIFT
-
-Ví dụ:
 
 ```json
 {
@@ -708,8 +1076,6 @@ File avatar temp tồn tại theo vòng đời của collector/process và khôn
 GET /api/health
 ```
 
-Ví dụ:
-
 ```bash
 curl http://192.168.1.10:8787/api/health
 ```
@@ -736,8 +1102,6 @@ GET /api/recent?limit=50
 GET /api/schema
 ```
 
-Ví dụ:
-
 ```bash
 curl http://192.168.1.10:8787/api/schema
 ```
@@ -753,82 +1117,48 @@ Trả danh sách endpoint cơ bản.
 
 ---
 
-# Nên dùng cách nào?
-
-Nếu một **web/app/game client** cần nhận event liên tục:
-
-```text
-SSE /api/events
-```
-
-Nếu **game server/backend đã có HTTP server**:
-
-```text
-Webhook
-```
-
-Nếu thiết bị/client chỉ gọi HTTP thông thường được:
-
-```text
-Polling /api/recent
-```
-
-Nếu xử lý/log ở cùng máy:
-
-```text
-JSONL
-```
-
-Về độ phù hợp cho realtime:
-
-```text
-SSE / Webhook  >  Polling  >  đọc JSONL thủ công
-```
-
----
-
 # Gợi ý xử lý event an toàn
 
-Dù nhận qua SSE, Webhook hay polling, nên dùng `eventId` làm khóa chống xử lý trùng.
+Dù nhận qua SSE, Webhook hay Polling, nên dùng `eventId` làm khóa chống xử lý trùng.
 
-Ví dụ:
+Ví dụ cache giới hạn ID gần nhất:
 
 ```js
-const processedEventIds = new Set();
+const processed = new Set();
+const order = [];
+const MAX_IDS = 5000;
 
 function handleTikTokEvent(event) {
-  if (processedEventIds.has(event.eventId)) {
-    return;
-  }
+  if (processed.has(event.eventId)) return;
 
-  processedEventIds.add(event.eventId);
+  processed.add(event.eventId);
+  order.push(event.eventId);
+
+  if (order.length > MAX_IDS) {
+    processed.delete(order.shift());
+  }
 
   switch (event.eventType) {
     case "comment":
+      console.log("comment", event.payload.text);
       break;
 
     case "gift":
+      console.log("gift", event.payload.giftName, event.payload.count);
       break;
 
     case "like":
-      break;
-
     case "join":
-      break;
-
     case "follow":
-      break;
-
     case "share":
-      break;
-
     case "avatar":
+      console.log(event.eventType, event);
       break;
   }
 }
 ```
 
-Nếu chạy lâu, không nên giữ `Set` vô hạn; có thể dùng cache giới hạn số lượng ID gần nhất.
+Không nên giữ `Set` vô hạn khi chương trình chạy lâu.
 
 ---
 
