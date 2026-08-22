@@ -1,0 +1,205 @@
+name: Build avatar Termux portable and publish
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/build-avatar-termux-publish.yml'
+      - 'BUILD_TERMUX_TRIGGER.txt'
+
+permissions:
+  actions: read
+  contents: write
+
+env:
+  SOURCE_REPO: banupham/tiktok_live_cmd_active_viewers_v9
+  SOURCE_REF: simplify-windows-linux-termux
+  DESKTOP_RUN_ID: '32567498777'
+  PYDANTIC_CORE_VERSION: '2.46.4'
+
+jobs:
+  termux-arm64:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SOURCE_REPO }}
+          ref: ${{ env.SOURCE_REF }}
+          path: source
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - name: Set up Android NDK
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r27c
+      - name: Build Android pydantic-core and assemble Termux bundle
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python -m py_compile source/scripts/direct_webcast_collector.py
+          python -m pip install --upgrade pip
+          python -m pip install 'maturin>=1.13.3,<2'
+          rustup target add aarch64-linux-android
+
+          BASE_URL='https://packages.termux.dev/apt/termux-main/pool/main/p/python'
+          FNAME=$(curl -fsSL "$BASE_URL/" | grep -oP '(?<=href=")python_[^"]+_aarch64\.deb' | head -n 1)
+          test -n "$FNAME"
+          curl -fL "$BASE_URL/$FNAME" -o termux-python.deb
+          mkdir -p termux-python
+          dpkg-deb -x termux-python.deb termux-python
+
+          TERMUX_PREFIX="$PWD/termux-python/data/data/com.termux/files/usr"
+          TERMUX_PYVER=$(find "$TERMUX_PREFIX/lib" -maxdepth 1 -type d -name 'python3.*' -printf '%f\n' | sed 's/^python//' | sort -V | tail -n 1)
+          test -n "$TERMUX_PYVER"
+          echo "Termux Python target: $TERMUX_PYVER"
+
+          NDK_BIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          NDK_LIB="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/24"
+          mkdir -p "$NDK_LIB"
+          cp -a "$TERMUX_PREFIX"/lib/libpython* "$NDK_LIB/"
+
+          python -m pip download "pydantic_core==$PYDANTIC_CORE_VERSION" --no-binary=:all: --no-deps -d core-src
+          mkdir -p core-build android-wheels
+          tar -xf core-src/pydantic_core-*.tar.gz -C core-build --strip-components=1
+
+          export CC_aarch64_linux_android="$NDK_BIN/aarch64-linux-android24-clang"
+          export AR_aarch64_linux_android="$NDK_BIN/llvm-ar"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$NDK_BIN/aarch64-linux-android24-clang"
+          export PYO3_CROSS_LIB_DIR="$TERMUX_PREFIX/lib"
+          export PYO3_CROSS_PYTHON_VERSION="$TERMUX_PYVER"
+
+          (cd core-build && maturin build --release --strip --manylinux off --target aarch64-linux-android --out ../android-wheels)
+
+          mkdir -p bundle/app bundle/app/scripts bundle/vendor wheel-unpack
+          python -m pip install -r source/requirements-direct.txt --target bundle/vendor
+          find bundle/vendor -type f \( -name '*.so' -o -name '*.pyc' \) -delete
+          find bundle/vendor -type d -name '__pycache__' -prune -exec rm -rf {} + || true
+
+          python -m zipfile -e "$(find android-wheels -name 'pydantic_core-*.whl' | head -n 1)" wheel-unpack
+          rm -rf bundle/vendor/pydantic_core
+          cp -a wheel-unpack/pydantic_core bundle/vendor/pydantic_core
+
+          CORE_SO=$(find bundle/vendor/pydantic_core -name '_pydantic_core*.so' | head -n 1)
+          test -n "$CORE_SO"
+          file "$CORE_SO"
+          readelf -h "$CORE_SO" | grep -E 'Class:|Machine:'
+          file "$CORE_SO" | grep -q 'ARM aarch64'
+
+          cp source/a.mjs bundle/app/a.mjs
+          cp -R source/src bundle/app/src
+          cp source/scripts/direct_webcast_collector.py bundle/app/scripts/direct_webcast_collector.py
+
+          cat > bundle/run.sh <<'EOF'
+          #!/data/data/com.termux/files/usr/bin/sh
+          set -eu
+          ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+          if ! command -v node >/dev/null 2>&1; then
+            echo '[THIEU NODE] Can runtime node cua Termux; khong can npm install.' >&2
+            exit 10
+          fi
+          if ! command -v python >/dev/null 2>&1; then
+            echo '[THIEU PYTHON] Can runtime python cua Termux; khong can pip install.' >&2
+            exit 11
+          fi
+          python - <<'PY'
+          import sys
+          if sys.version_info < (3, 14):
+              raise SystemExit('Can Python Termux 3.14+ cho native pydantic-core da dong goi.')
+          PY
+          if [ "$#" -lt 1 ]; then
+            echo 'Cach dung: ./run.sh ten_tiktok [api_port]'
+            exit 1
+          fi
+          USERNAME=$1
+          if [ "${2:-}" != "" ]; then export API_PORT=$2; fi
+          : "${API_PORT:=8787}"
+          export API_PORT COLLECTOR_MODE=direct PYTHON_BIN=python
+          export PYTHONPATH="$ROOT/vendor${PYTHONPATH:+:$PYTHONPATH}"
+          export PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
+          exec node "$ROOT/app/a.mjs" "$USERNAME"
+          EOF
+          chmod +x bundle/run.sh
+
+          cat > bundle/README.txt <<EOF
+          TERMUX ARM64 - KHONG CAN npm install / pip install
+          ==================================================
+          Co event avatar: avatar_thumb duoc tai mot lan/user vao thu muc temp cua collector.
+          Event avatar gom avatarUrl + avatarPath; cung avatar khong lap theo comment/join/like/gift.
+          Thu vien Python da vendor san, gom pydantic-core native Android ARM64.
+          Yeu cau nen: Termux co san node va python (Python $TERMUX_PYVER target).
+          Chay: ./run.sh ten_tiktok [api_port]
+          EOF
+
+          tar -C bundle -czf tiktok-live-event-termux-arm64.tar.gz .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: portable-termux-arm64-avatar
+          path: tiktok-live-event-termux-arm64.tar.gz
+          if-no-files-found: error
+
+  publish:
+    needs: [termux-arm64]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout main for publishing
+        uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Download verified desktop artifacts
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ env.DESKTOP_RUN_ID }}
+          pattern: portable-*-avatar
+          path: downloads
+          merge-multiple: true
+      - name: Download Termux artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: portable-termux-arm64-avatar
+          path: downloads
+      - name: Publish updated runnable packages
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p releases
+          cp downloads/tiktok-live-event-windows-x64.zip releases/
+          cp downloads/tiktok-live-event-linux-x64.tar.gz releases/
+          cp downloads/tiktok-live-event-linux-arm64.tar.gz releases/
+          cp downloads/tiktok-live-event-termux-arm64.tar.gz releases/
+          sha256sum releases/* > SHA256SUMS.txt
+          cat > README.md <<'EOF'
+          # TikTok LIVE Event — bản chạy sẵn
+
+          Repo phân phối **Direct Webcast mode** đã đóng gói. Không cần `npm install` hoặc `pip install`, không dùng Chrome/DOM/Playwright.
+
+          | Hệ | Gói | Chạy |
+          |---|---|---|
+          | Windows x64 | `releases/tiktok-live-event-windows-x64.zip` | Giải nén → `run.bat ten_tiktok` |
+          | Linux x64 | `releases/tiktok-live-event-linux-x64.tar.gz` | Giải nén → `./run.sh ten_tiktok` |
+          | Linux ARM64 | `releases/tiktok-live-event-linux-arm64.tar.gz` | Giải nén → `./run.sh ten_tiktok` |
+          | Termux ARM64 | `releases/tiktok-live-event-termux-arm64.tar.gz` | Giải nén → `./run.sh ten_tiktok` |
+
+          Có thể thêm API port ở tham số thứ hai, ví dụ `run.bat ten_tiktok 8788` hoặc `./run.sh ten_tiktok 8788`.
+
+          ## Event avatar
+
+          Direct collector lấy `avatar_thumb` của user và tải file ảnh vào **thư mục tạm của tiến trình**. Avatar được cache theo TikTok `userId` (fallback `uniqueId`) nên COMMENT/JOIN/LIKE/FOLLOW/SHARE/GIFT của cùng user **không tải và không phát avatar lặp lại**.
+
+          Khi gặp avatar lần đầu hoặc avatar thật sự đổi, middleware phát một event riêng `eventType: "avatar"`. `payload` có `avatarUrl`, `avatarPath`, `mimeType`, `bytes`, `cache: "temp"`, `changed` và `previousAvatarUrl`. Các event khác không mang avatar để tránh dữ liệu lặp. Cache RAM mới nhất cũng được giữ trong `EventBus` cho phần sử dụng tùy biến sau; `/api/health` có `avatarCount`.
+
+          File ảnh temp tự thuộc vòng đời của collector/process và không phải dữ liệu lưu lâu dài.
+
+          **Windows/Linux:** Node và Python collector đã nằm trong gói, không cần cài runtime hay thư viện.
+
+          **Termux ARM64:** thư viện Python (kể cả `pydantic-core` native Android) đã nằm trong gói nên không cần npm/pip. Termux cần có sẵn runtime `node` và `python` 3.14+.
+
+          Hash SHA-256: xem `SHA256SUMS.txt`.
+          EOF
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md SHA256SUMS.txt releases/
+          git commit -m "Update portable packages with avatar event"
+          git push origin main
